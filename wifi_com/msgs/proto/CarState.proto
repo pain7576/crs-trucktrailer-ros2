@@ -1,0 +1,14 @@
+syntax = "proto2";
+
+import "SingleControlInput.proto";
+import "IMUMeasurement.proto";
+import "MotorInput.proto";
+import "SteeringPositionMeasurement.proto";
+
+message CarState {
+    required SingleControlInput current_reference = 1;
+    required MotorInput drive_motor_input = 2;
+    required MotorInput steer_motor_input = 3;
+    required IMUMeasurement imu_data = 4;
+    required SteeringPositionMeasurement steer_data = 5;
+}

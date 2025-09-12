@@ -21,7 +21,8 @@ setup(
     entry_points={
         'console_scripts': [
             'natnet_sim = relative_pose_handler.pub_natnet_sim:main',
-            'angle_finder = relative_pose_handler.world_2_angle:main'
+            'angle_finder = relative_pose_handler.world_2_angle:main',
+            'control_sim = relative_pose_handler.pub_controller_sim:main'
         ],
     },
 )

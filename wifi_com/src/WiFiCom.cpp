@@ -2,10 +2,7 @@
  * @file WiFiCom.cpp
  * @author Lukas Vogel (vogellu@ethz.ch)
  * @brief Class that communicates with cars over Wi-Fi and UDP.
- * @brief ROS 2 Migration by Gemini
  */
-
-#include "wifi_com/WiFiCom.h"
 
 #include <arpa/inet.h>
 #include <boost/interprocess/streams/bufferstream.hpp>
@@ -16,11 +13,13 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <chrono>
-
+#include "rclcpp/rclcpp.hpp"
 #include "Packet.pb.h"
-
-using namespace std::chrono_literals;
+#include "crs_msgs/msg/car_input.hpp"
+#include "crs_msgs/msg/car_ll_control_input.hpp"
+#include "crs_msgs/msg/car_steer_state.hpp"
+#include "sensor_msgs/msg/imu.hpp"
+#include "wifi_com/WiFiCom.h"
 
 /** Default port number to open the UDP server on in case nothing was specified
     in the config file. */
@@ -33,20 +32,18 @@ using namespace std::chrono_literals;
 
 /* Public method implementation --------------------------------------------- */
 
-WiFiCom::WiFiCom() : rclcpp::Node("wifi_com"), udp_port_(DEFAULT_PORT_NUM)
+WiFiCom::WiFiCom(std::shared_ptr<rclcpp::Node> node) : node_(node), udp_port_(DEFAULT_PORT_NUM)
 {
   loadParameters();
-  setupPublishers();
   setupSubscribers();
+  setupPublishers();
   startUDPServer();
-
-  // The original node ran at 500Hz. We create a wall timer to call poll() at the same rate.
-  timer_ = this->create_wall_timer(2ms, std::bind(&WiFiCom::poll, this));
+  return;
 }
 
 WiFiCom::~WiFiCom()
 {
-  udp_server_.stopListening();
+  return;
 }
 
 void WiFiCom::poll()
@@ -54,9 +51,10 @@ void WiFiCom::poll()
   uint8_t rx_buffer[512];
   ssize_t recv_len = udp_server_.pollReceive(&client_, rx_buffer, sizeof(rx_buffer));
 
+
   if (recv_len < 0)
   {
-    RCLCPP_ERROR(this->get_logger(), "Polling of UDP server threw an error! Code: %ld", recv_len);
+    RCLCPP_ERROR_STREAM(node_->get_logger(), "Polling of UDP server threw an error!" << recv_len);
     return;
   }
   if (recv_len == 0)
@@ -64,6 +62,7 @@ void WiFiCom::poll()
     // no new data arrived
     return;
   }
+  //RCLCPP_INFO_STREAM(node_->get_logger(), "new data arrived");
 
   // Byte array is null terminated, so can cast to string
   boost::interprocess::bufferstream rx_istream((char*)rx_buffer, recv_len);
@@ -71,12 +70,18 @@ void WiFiCom::poll()
   Packet p;
   if (!p.ParseFromIstream(&rx_istream))
   {
-    RCLCPP_ERROR(this->get_logger(), "Could not parse packet from input stream.");
-    return;
+    RCLCPP_ERROR(node_->get_logger(), "Could not parse packet from input stream.");
   }
+
+
+  std::cout<<"Car State: "<<p.has_car_state()<<std::endl;
+  std::cout<<"Ping: "<<p.has_ping()<<std::endl;
+  std::cout<<"CI: "<<p.has_control_input()<<std::endl;
 
   if (p.has_car_state())
   {
+      RCLCPP_INFO_STREAM(node_->get_logger(), "CRS Car has state");
+      std::cout<<node_->now().seconds()<<std::endl;
     const CarState& state = p.car_state();
     if (state.has_drive_motor_input() && state.has_steer_motor_input() && state.has_current_reference())
     {
@@ -95,7 +100,8 @@ void WiFiCom::poll()
   }
   else
   {
-    RCLCPP_WARN(this->get_logger(), "Received unknown packet type, dropping...");
+
+    RCLCPP_WARN(node_->get_logger(), "Received unknown packet type, dropping...");
   }
 }
 
@@ -108,26 +114,31 @@ void WiFiCom::controllerCallback(const crs_msgs::msg::CarInput::SharedPtr msg)
 
 void WiFiCom::loadParameters()
 {
-  RCLCPP_INFO(this->get_logger(), "WiFiCom: loading parameters");
-  this->declare_parameter<int>("udp_port", DEFAULT_PORT_NUM);
-  this->get_parameter("udp_port", udp_port_);
-  RCLCPP_INFO(this->get_logger(), "Using UDP port: %d", udp_port_);
+  RCLCPP_INFO(node_->get_logger(), "WiFiCom: loading parameters");
+
+  // Declare parameter with default value if it doesn't exist
+  node_->declare_parameter<int>("udp_port", DEFAULT_PORT_NUM);
+  udp_port_ = node_->get_parameter("udp_port").as_int();
+
+  if (udp_port_ == DEFAULT_PORT_NUM)
+  {
+    RCLCPP_WARN_STREAM(node_->get_logger(), "No port number from config, using standard port: " << udp_port_);
+  }
 }
 
 void WiFiCom::setupSubscribers()
 {
-  // In ROS 2, QoS settings are important. 10 is a common history depth.
-  sub_control_input_ = this->create_subscription<crs_msgs::msg::CarInput>(
-      "control_input", 10, std::bind(&WiFiCom::controllerCallback, this, std::placeholders::_1));
+  sub_control_input_ = node_->create_subscription<crs_msgs::msg::CarInput>(
+    "control_input", 1, std::bind(&WiFiCom::controllerCallback, this, std::placeholders::_1));
 }
 
 void WiFiCom::setupPublishers()
 {
   // While all these messages might arrive in the same packet from the car, each
   // belongs to a separate CRS topic and they are thus published on those:
-  pub_car_ll_control_input_ = this->create_publisher<crs_msgs::msg::CarLlControlInput>("car_ll_control_input", 10);
-  pub_imu_ = this->create_publisher<sensor_msgs::msg::Imu>("imu", 10);
-  pub_car_steer_state_ = this->create_publisher<crs_msgs::msg::CarSteerState>("car_steer_state", 10);
+  pub_car_ll_control_input_ = node_->create_publisher<crs_msgs::msg::CarLlControlInput>("car_ll_control_input", 1);
+  pub_imu_ = node_->create_publisher<sensor_msgs::msg::Imu>("imu", 1);
+  pub_car_steer_state_ = node_->create_publisher<crs_msgs::msg::CarSteerState>("car_steer_state", 1);
 }
 
 bool WiFiCom::startUDPServer()
@@ -135,10 +146,10 @@ bool WiFiCom::startUDPServer()
   udp_server_.setPortNum(udp_port_);
   if (!udp_server_.startListening())
   {
-    RCLCPP_ERROR(this->get_logger(), "Could not start listening on UDP server!");
+    RCLCPP_ERROR(node_->get_logger(), "Could not start listening on UDP server!");
     return false;
   }
-  RCLCPP_INFO(this->get_logger(), "WiFiCom: Started listening on UDPServer, port = %d", udp_port_);
+  RCLCPP_INFO_STREAM(node_->get_logger(), "WiFiCom: Started listening on UDPServer, port = " << udp_port_);
   return true;
 }
 
@@ -152,7 +163,7 @@ void WiFiCom::sendControlInput(const crs_msgs::msg::CarInput::SharedPtr msg)
   // Handle case where the car's internal steering map should be overriden and
   // a raw potentiometer reference sent. This is indicated by the steer_override
   // flag in the car_input message.
-  if (msg->steer_override)
+  if (msg->steer_override)  // NOLINT
   {
     inp->mutable_steer_input()->set_steer_voltage(msg->steer);
   }
@@ -168,27 +179,22 @@ void WiFiCom::sendControlInput(const crs_msgs::msg::CarInput::SharedPtr msg)
   // which is untested both in the server as in the client code.
   if (serialized_bytes.length() > UDP_MAX_RECOMMENDED_SIZE)
   {
-    RCLCPP_WARN(this->get_logger(), "Packet length is %zuB, while recommended limit is %dB!",
-                                     serialized_bytes.length(), UDP_MAX_RECOMMENDED_SIZE);
+    RCLCPP_WARN_STREAM(node_->get_logger(), "Packet length is " << serialized_bytes.length() << "B, while recommended limit is "
+                                        << UDP_MAX_RECOMMENDED_SIZE << "B!");
   }
 
   if (client_.ss_family == AF_INET || client_.ss_family == AF_INET6)
   {
     if (!udp_server_.send(&client_, (uint8_t*)serialized_bytes.c_str(), serialized_bytes.length()))
     {
-      RCLCPP_ERROR(this->get_logger(), "Failed to send packet!");
+      RCLCPP_ERROR(node_->get_logger(), "Failed to send packet!");
     }
   }
 }
 
 void WiFiCom::publishImuData(const IMUMeasurement& data)
 {
-  auto msg = sensor_msgs::msg::Imu();
-
-  // Set header timestamp and frame_id
-  msg.header.stamp = this->now();
-  // TODO: Consider making the frame_id a configurable parameter
-  msg.header.frame_id = "imu_link";
+  sensor_msgs::msg::Imu msg;
 
   // Convention: Set covariance of sensor measurement "orientation" to -1 if
   // this message field is invalid (which it is here, we don't have an absolute
@@ -198,7 +204,7 @@ void WiFiCom::publishImuData(const IMUMeasurement& data)
   // Remap axes and adjust units:
   // - x and y axes need to be reversed
   // - acceleration must be converted from g to m/s^2
-  // - angular velocity should be converted from deg/s to rad/s
+  // angular velocity should be converted from deg/s to rad/s
   msg.linear_acceleration.x = -data.linear_acceleration().x() * GRAVITATIONAL_ACCELERATION;
   msg.linear_acceleration.y = -data.linear_acceleration().y() * GRAVITATIONAL_ACCELERATION;
   msg.linear_acceleration.z = +data.linear_acceleration().z() * GRAVITATIONAL_ACCELERATION;
@@ -212,7 +218,7 @@ void WiFiCom::publishImuData(const IMUMeasurement& data)
 void WiFiCom::publishLowLevelControlInput(const SingleControlInput& reference, const MotorInput& drive_input,
                                           const MotorInput& steer_input)
 {
-  auto msg = crs_msgs::msg::CarLlControlInput();
+  crs_msgs::msg::CarLlControlInput msg;
 
   msg.drive_power = drive_input.power();
   msg.steer_power = steer_input.power();
@@ -225,7 +231,7 @@ void WiFiCom::publishLowLevelControlInput(const SingleControlInput& reference, c
 
 void WiFiCom::publishSteerState(const SteeringPositionMeasurement& steer_state)
 {
-  auto msg = crs_msgs::msg::CarSteerState();
+  crs_msgs::msg::CarSteerState msg;
   msg.steer_angle = steer_state.steer_rad();
   msg.steer_discrete_pos = steer_state.adc_meas();
 

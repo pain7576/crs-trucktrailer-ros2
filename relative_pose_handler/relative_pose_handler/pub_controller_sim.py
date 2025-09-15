@@ -8,7 +8,7 @@ class Controller_simulator(Node):
     def __init__(self):
         super().__init__('controller_publisher')
         self.publisher1 = self.create_publisher(CarInput,'control_input',10)
-        self.timer = self.create_timer(0.1, self.timer_callback)
+        self.timer = self.create_timer(0.01, self.timer_callback)
 
     def timer_callback(self):
         msg4 = CarInput()

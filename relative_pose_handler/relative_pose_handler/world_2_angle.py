@@ -4,14 +4,15 @@ import math
 from rclpy.node import Node
 from custom_msg.msg import MyWorldAngle
 from custom_msg.msg import WorldOrientation
+from geometry_msgs.msg import PoseStamped
 
 
 class World2angle(Node):
     def __init__(self):
         super().__init__('quaternion2angle')
-        self.subscription = self.create_subscription(WorldOrientation,'world_quaternion',self.quaternion2angle_callback,10)
+        self.subscription = self.create_subscription(PoseStamped,'BEN_CAR_WIFI/pose',self.quaternion2angle_callback,10)
         self.pubangle = self.create_publisher(MyWorldAngle,'angle',10)
-        self.q1 = [0.30943127229359507,  0.9061490616051597, 0.07920361817209619, -0.27725972074447486]
+        self.q1 = [0.6530918478965759, -0.015541106462478638, -0.020415853708982468, 0.7568438649177551] #[w,x,y,z]
         self.q2 = [0.0, 0.0, 0.0, 0.0]
 
     def quaternion_to_euler(self, q):
@@ -36,7 +37,7 @@ class World2angle(Node):
 
         return roll, pitch, yaw
 
-    def angle_finder(self, q1 ,q2):
+    def angle_finder(self, q1, q2):
         r1, p1, y1 = self.quaternion_to_euler(q1)
         r2, p2, y2 = self.quaternion_to_euler(q2)
 
@@ -45,13 +46,21 @@ class World2angle(Node):
         d_pitch = math.degrees(p2 - p1)
         d_yaw = math.degrees(y2 - y1)
 
+        # --- SOLUTION: NORMALIZE THE YAW ANGLE ---
+        # Wrap the angle to the range [-180, 180]
+        if d_yaw > 180:
+            d_yaw -= 360
+        elif d_yaw < -180:
+            d_yaw += 360
+        # You can do the same for d_roll and d_pitch if needed
+
         return d_roll, d_pitch, d_yaw
 
-    def quaternion2angle_callback(self, msg):
-        self.q2[0] = msg.x
-        self.q2[1] = msg.y
-        self.q2[2] = msg.z
-        self.q2[3] = msg.w
+    def quaternion2angle_callback(self, msgRigidBodyPose):
+        self.q2[0] = msgRigidBodyPose.pose.orientation.w
+        self.q2[1] = msgRigidBodyPose.pose.orientation.x
+        self.q2[2] = msgRigidBodyPose.pose.orientation.y
+        self.q2[3] = msgRigidBodyPose.pose.orientation.z
 
         diffx, diffy, diffz = self.angle_finder(self.q1,self.q2)
         self.publish_angle(diffx)

@@ -18,7 +18,10 @@ def generate_launch_description():
             executable='wifi_com_node',
             name='wifi_com_node',
             output='screen',
-            parameters=[config_file]
+            parameters=
+            [
+                config_file
+            ]
         )
     ])
 

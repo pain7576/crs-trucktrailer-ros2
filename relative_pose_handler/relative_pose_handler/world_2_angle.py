@@ -63,13 +63,13 @@ class World2angle(Node):
         self.q2[3] = msgRigidBodyPose.pose.orientation.z
 
         diffx, diffy, diffz = self.angle_finder(self.q1,self.q2)
-        self.publish_angle(diffx)
+        self.publish_angle(diffz)
 
         self.get_logger().info(f'Angle differences - X: {diffx:.4f}°, Y: {diffy:.4f}°, Z: {diffz:.4f}°')
 
-    def publish_angle(self, diffx):
+    def publish_angle(self, angle):
         msg1 = MyWorldAngle()
-        msg1.angle = diffx
+        msg1.angle = angle
         self.pubangle.publish(msg1)
 
 

@@ -22,7 +22,9 @@ setup(
         'console_scripts': [
             'natnet_sim = relative_pose_handler.pub_natnet_sim:main',
             'angle_finder = relative_pose_handler.world_2_angle:main',
-            'control_sim = relative_pose_handler.pub_controller_sim:main'
+            'control_sim = relative_pose_handler.pub_controller_sim:main',
+            'car_pose = relative_pose_handler.pub_car_world_2_my_world:main',
+            'pose = relative_pose_handler.car_publisher:main'
         ],
     },
 )

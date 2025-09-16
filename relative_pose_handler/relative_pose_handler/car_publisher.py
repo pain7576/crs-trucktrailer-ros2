@@ -12,7 +12,7 @@ class Car_state_publisher(Node):
         super().__init__('car_state_publisher')
         self.carmocap = self.create_subscription(PoseStamped, 'BEN_CAR_WIFI/pose', self.latest_value_callback, 10)
         self.carpub = self.create_publisher(CarState, 'car_state',10)
-        self.throttle = self.create_timer(0.5, self.car_state_callback)
+        self.throttle = self.create_timer(0.08, self.car_state_callback)
         self.q1 = [0.6530918478965759, -0.015541106462478638, -0.020415853708982468, 0.7568438649177551]
         self.q2 = [0, 0, 0, 0]
         self.origin_my_world = [0.30958878993988037, 0.7059913873672485]

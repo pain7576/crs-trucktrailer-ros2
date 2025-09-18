@@ -2,148 +2,227 @@ import rclpy
 from rclpy.node import Node
 from custom_msg.msg import CarState
 from custom_msg.msg import TruckTrailerState
+from crs_msgs.msg import CarSteerState
 from matplotlib.patches import Rectangle, Circle
 from matplotlib.transforms import Affine2D
 import matplotlib.pyplot as plt
-import scipy.integrate as spi
 import numpy as np
 import math
+import sympy as sp
+from sympy import symbols, Matrix, sin, cos, tan
+from filterpy.kalman import ExtendedKalmanFilter as EKF
 
 
-class TrailerPublisher(Node):
+class RobotEKF(EKF):
+    """
+    Extended Kalman Filter for a Truck and Trailer System.
+
+    State vector (x): [x1, y1, psi1, x2, y2, psi2]
+        - (x1, y1): Truck's rear axle position
+        - psi1: Truck's heading angle (radians)
+        - (x2, y2): Trailer's axle position
+        - psi2: Trailer's heading angle (radians)
+
+    Measurement vector (z): [x1, y1, psi1]
+        - Direct measurements of the truck's pose.
+
+    Control vector (u): [steering_angle, v1x]
+        - delta (steering_angle): Truck's steering angle (radians)
+        - v1x: Truck's forward velocity
+    """
+
+    def __init__(self, dt, L1, L2, hitch_offset):
+        # State vector: [x1, y1, psi1, x2, y2, psi2]
+        super().__init__(dim_x=6, dim_z=3, dim_u=2)
+
+        self.dt = dt
+        self.L1 = L1
+        self.L2 = L2
+        self.hitch_offset = hitch_offset
+
+        # --- Setup Symbolic Model ---
+        self._setup_symbolic_model()
+
+        # --- Noise Covariances ---
+        # Measurement noise (R): uncertainty of our sensors (e.g., GPS, IMU)
+        std_x, std_y, std_psi = 0.05, 0.05, np.deg2rad(0.1)
+        self.R = np.diag([std_x ** 2, std_y ** 2, std_psi ** 2])
+
+        # Process noise (Q): uncertainty in the kinematic model
+        std_pos_proc = 0.01
+        std_psi_proc = np.deg2rad(0.1)
+        self.Q = np.diag([
+            std_pos_proc ** 2, std_pos_proc ** 2, std_psi_proc ** 2,
+            std_pos_proc ** 2, std_pos_proc ** 2, std_psi_proc ** 2
+        ])
+
+        # Control noise (M): uncertainty in control inputs
+        std_steer = np.deg2rad(3.0)
+        std_v = 2
+        self.M = np.diag([std_steer ** 2, std_v ** 2])
+
+        # Measurement function H
+        self.H = np.array([
+            [1, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0]
+        ])
+
+    def _setup_symbolic_model(self):
+        """
+        Derives the state transition function and its Jacobians using sympy.
+        """
+        x1_s, y1_s, psi1_s, x2_s, y2_s, psi2_s = symbols('x1 y1 psi1 x2 y2 psi2')
+        delta_s, v1x_s = symbols('delta v1x')
+        state_s = Matrix([x1_s, y1_s, psi1_s, x2_s, y2_s, psi2_s])
+        control_s = Matrix([delta_s, v1x_s])
+
+        # Kinematic model
+        hitch_s = psi1_s - psi2_s
+        dpsi1_s = (v1x_s / self.L1) * tan(delta_s)
+        v2x_s = v1x_s * cos(hitch_s) + self.hitch_offset * dpsi1_s * sin(hitch_s)
+        dpsi2_s = (v1x_s / self.L2) * sin(hitch_s) - (self.hitch_offset / self.L2) * dpsi1_s * cos(hitch_s)
+        dx1_s = v1x_s * cos(psi1_s)
+        dy1_s = v1x_s * sin(psi1_s)
+        dx2_s = v2x_s * cos(psi2_s)
+        dy2_s = v2x_s * sin(psi2_s)
+
+        state_dot_s = Matrix([dx1_s, dy1_s, dpsi1_s, dx2_s, dy2_s, dpsi2_s])
+
+        # Jacobians
+        F_j = state_dot_s.jacobian(state_s)
+        G_j = state_dot_s.jacobian(control_s)
+
+        # Create fast, callable functions
+        self.state_dot_func = sp.lambdify((state_s, control_s), state_dot_s, 'numpy')
+        self.F_jacobian_func = sp.lambdify((state_s, control_s), F_j, 'numpy')
+        self.G_jacobian_func = sp.lambdify((state_s, control_s), G_j, 'numpy')
+
+    def predict(self, u):
+        """
+        Predicts the next state and covariance using the control input u.
+        """
+        # --- Predict State (using Euler integration) ---
+        state_dot = self.state_dot_func(self.x, u).flatten()
+        self.x = self.x + state_dot * self.dt
+
+        # Normalize truck heading (psi1)
+        self.x[2] = np.arctan2(np.sin(self.x[2]), np.cos(self.x[2]))
+        # Normalize trailer heading (psi2)
+        self.x[5] = np.arctan2(np.sin(self.x[5]), np.cos(self.x[5]))
+
+        # --- Predict Covariance ---
+        F = self.F_jacobian_func(self.x, u)
+        G = self.G_jacobian_func(self.x, u)
+        F_k = np.eye(self.dim_x) + F * self.dt
+        self.P = F_k @ self.P @ F_k.T + G @ self.M @ G.T * self.dt ** 2 + self.Q
+
+    def update(self, z):
+        """
+        Updates the state estimate with a new measurement z.
+        """
+        super().update(z, HJacobian=lambda x: self.H, Hx=lambda x: self.H @ x, R=self.R)
+
+
+class EKFTrailerPublisher(Node):
     def __init__(self):
-        super().__init__('trailer_publisher')
+        super().__init__('ekf_trailer_publisher')
 
-        # Subscribing to truck's state: [x, y, angle]
+        # Subscriptions
         self.sub = self.create_subscription(CarState, '/car_state', self.truck_state_callback, 10)
+        self.sub1 = self.create_subscription(CarSteerState, '/car_steer_state', self.steer_callback, 10)
 
-        # Publisher for trailer pose
+        # Publisher
         self.pub = self.create_publisher(TruckTrailerState, '/truck_trailer_pose', 10)
 
         # Constants
-        self.L1 = 9  # Truck length (from rear axle to front axle)
-        self.L2 = 10  # Trailer length (from its axle to the hitch point)
-        self.hitch_offset = 0  # Offset from rear axle of truck to hitch point
-        self.v1x = 0.0  # Forward speed of truck (cm/s), initialized to 0
-        self.steering_angle = np.deg2rad(13)  # In radians (adjust as needed)
+        self.L1 = 9.0
+        self.L2 = 10.0
+        self.hitch_offset = 0.0
 
-        # State is now separated for clarity and correctness
-        self.truck_state = None  # [psi1, x1, y1] - Truck heading, x, y (rear axle)
-        self.trailer_state = None  # [psi2, x2, y2] - Trailer heading, x, y (trailer axle)
+        # Control inputs
+        self.v1x = 0.0
+        self.steering_angle = 0.0
 
+        # EKF Initialization
+        # dt is initialized to a small number; it will be updated dynamically.
+        self.ekf = RobotEKF(dt=0.01, L1=self.L1, L2=self.L2, hitch_offset=self.hitch_offset)
+
+        # State tracking
         self.initialized = False
-        self.simulation_time = 0  # simulation time
         self.last_truck_x = None
         self.last_truck_y = None
         self.last_timestamp = None
 
-        # Configuration space for the environment
-        self.min_map_x = -75
-        self.min_map_y = -75
-        self.max_map_x = 75
-        self.max_map_y = 75
+        # Environment configuration
+        self.min_map_x, self.max_map_x = -75, 75
+        self.min_map_y, self.max_map_y = -75, 75
 
     def truck_state_callback(self, car_msg):
         current_time = self.get_clock().now()
-        # The incoming message represents the truck's rear axle position and heading
-        truck_x = round(car_msg.x)
-        truck_y = round(car_msg.y)
+        truck_x = car_msg.x
+        truck_y = car_msg.y
         psi1 = np.deg2rad(car_msg.angle)
 
-        if not self.initialized:
-            # Initialize both truck and trailer states on the first message
-            self.truck_state = np.array([psi1, truck_x, truck_y])
+        # Measurement vector from incoming message
+        z = np.array([truck_x, truck_y, psi1])
 
-            # Trailer is initially aligned with truck, placed directly behind it
+        if not self.initialized:
+            # Initialize EKF state on the first message
             x2 = truck_x - self.L2 * math.cos(psi1)
             y2 = truck_y - self.L2 * math.sin(psi1)
             psi2 = psi1
-            self.trailer_state = np.array([psi2, x2, y2])
-            self.initialized = True
-            self.last_timestamp = current_time
-            self.last_truck_x = truck_x
-            self.last_truck_y = truck_y
-        else:
-            # Calculate actual dt from message timing
-            dt = (current_time - self.last_timestamp).nanoseconds / 1e9
+            self.ekf.x = np.array([truck_x, truck_y, psi1, x2, y2, psi2])
 
-            if dt > 0.001:  # Only proceed if meaningful time has passed
-                # Estimate velocity based on actual time elapsed
+            # Initialize covariance with high uncertainty
+            self.ekf.P = np.eye(6) * 500.0
+
+            self.initialized = True
+        else:
+            dt = (current_time - self.last_timestamp).nanoseconds / 1e9
+            if dt > 1e-4:  # Ensure a meaningful time step
+                # Estimate velocity
                 distance = np.sqrt((truck_x - self.last_truck_x) ** 2 + (truck_y - self.last_truck_y) ** 2)
                 self.v1x = distance / dt
-                if self.v1x > 15:
-                    self.v1x = 25
 
-                # Update truck state
-                self.truck_state = np.array([psi1, truck_x, truck_y])
+                # Update EKF's internal timestep
+                self.ekf.dt = dt
 
-                # Integrate trailer with actual dt (not fixed dt)
-                if not np.isclose(self.v1x, 0.0):
-                    sol = spi.solve_ivp(
-                        fun=lambda t, y: self.kinematic_model(t, y),
-                        t_span=[self.simulation_time, self.simulation_time + dt],  # Use actual dt
-                        y0=self.trailer_state,
-                        method='RK45'
-                    )
-                    self.trailer_state = sol.y[:, -1]
+                # --- EKF Cycle ---
+                # 1. Predict the next state based on control inputs
+                control_input = np.array([self.steering_angle, self.v1x])
+                self.ekf.predict(u=control_input)
 
-                self.simulation_time += dt
+                # 2. Update the state with the new measurement
+                self.ekf.update(z=z)
 
-                # Publish and render immediately after each update
+                # Publish the estimated state and render
                 self.publish_trailer_state()
                 self.render()
 
-            else:
-                # If dt is too small, just update truck state without integrating
-                self.truck_state = np.array([psi1, truck_x, truck_y])
-
+        # Update values for next iteration
         self.last_truck_x = truck_x
         self.last_truck_y = truck_y
         self.last_timestamp = current_time
 
+    def steer_callback(self, msg):
+        self.steering_angle = msg.steer_angle - np.deg2rad(2)
+
     def publish_trailer_state(self):
-        # Publish the combined state of the truck and trailer
-        truck_trailer_state = TruckTrailerState()
-        # Trailer state from the integrator
-        truck_trailer_state.psi2 = self.trailer_state[0]
-        truck_trailer_state.x2 = self.trailer_state[1]
-        truck_trailer_state.y2 = self.trailer_state[2]
-        # Truck state from the subscriber
-        truck_trailer_state.psi1 = self.truck_state[0]
-        truck_trailer_state.x1 = self.truck_state[1]
-        truck_trailer_state.y1 = self.truck_state[2]
-        self.pub.publish(truck_trailer_state)
+        if not self.initialized:
+            return
 
-    def kinematic_model(self, t, trailer_y):
-        """
-        Kinematic model of the TRAILER ONLY.
-        It calculates the trailer's motion based on the truck's current state.
-        """
-        # Unpack current truck state (from the subscriber)
-        psi_1, _, _ = self.truck_state
-        # Unpack current trailer state (from the integrator)
-        psi_2, _, _ = trailer_y
+        # Unpack estimated state from EKF
+        x1, y1, psi1, x2, y2, psi2 = self.ekf.x
 
-        # --- Calculate Trailer Motion ---
-        # Hitch angle difference is critical for trailer kinematics
-        hitch_angle = psi_1 - psi_2
-
-        # Truck's angular rate (needed for trailer calculations)
-        dpsi_1 = (self.v1x / self.L1) * np.tan(self.steering_angle)
-
-        # Trailer's forward velocity
-        v2x = self.v1x * np.cos(hitch_angle) + (self.hitch_offset * dpsi_1 * np.sin(hitch_angle))
-
-        # Trailer's angular rate (how fast the trailer turns)
-        dpsi_2 = (self.v1x / self.L2) * np.sin(hitch_angle) - (
-                (self.hitch_offset / self.L2) * dpsi_1 * np.cos(hitch_angle))
-
-        # Trailer's position derivatives (how fast it moves in x and y)
-        dx2 = v2x * np.cos(psi_2)
-        dy2 = v2x * np.sin(psi_2)
-
-        # Return the derivatives for the trailer's state vector [dpsi_2, dx2, dy2]
-        return np.array([dpsi_2, dx2, dy2])
+        msg = TruckTrailerState()
+        msg.x1 = x1
+        msg.y1 = y1
+        msg.psi1 = psi1
+        msg.x2 = x2
+        msg.y2 = y2
+        msg.psi2 = psi2
+        self.pub.publish(msg)
 
     def plot_vehicle(self, ax, x, y, heading, length, width, label, color='blue', show_wheels=True, steering_angle=0.0):
         """Plot vehicle visualization."""
@@ -224,8 +303,7 @@ class TrailerPublisher(Node):
 
         self.ax.clear()
 
-        psi1, x1, y1 = self.truck_state
-        psi2, x2, y2 = self.trailer_state
+        x1, y1, psi1, x2, y2, psi2 = self.ekf.x
 
         L1, W1 = self.L1, 2.0
         L2, W2 = self.L2, 2.0
@@ -267,7 +345,7 @@ class TrailerPublisher(Node):
 
 def main():
     rclpy.init()
-    node = TrailerPublisher()
+    node = EKFTrailerPublisher()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

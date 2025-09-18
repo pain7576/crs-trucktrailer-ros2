@@ -14,7 +14,7 @@ class Controller_simulator(Node):
         msg4 = CarInput()
         msg4.torque = 0.1 #  0.25 m/s
         msg4.velocity = math.nan
-        msg4.steer = np.deg2rad(13)
+        msg4.steer = np.deg2rad(2+10) # offfset due to physical constrain
         msg4.steer_override = False
 
         self.publisher1.publish(msg4)

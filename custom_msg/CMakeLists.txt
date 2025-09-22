@@ -14,6 +14,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
    "msg/WorldOrientation.msg"
    "msg/CarState.msg"
    "msg/TruckTrailerState.msg"
+   "msg/Shutdown.msg"
    )
 # uncomment the following section in order to fill in
 # further dependencies manually.

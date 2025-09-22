@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from custom_msg.msg import CarState
+from custom_msg.msg import Shutdown
 from geometry_msgs.msg import PoseStamped
 import matplotlib.pyplot as plt
 import math
@@ -11,8 +12,9 @@ class Car_state_publisher(Node):
     def __init__(self):
         super().__init__('car_state_publisher')
         self.carmocap = self.create_subscription(PoseStamped, 'BEN_CAR_WIFI/pose', self.latest_value_callback, 10)
+        self.shutdown_subscriber = self.create_subscription(Shutdown, '/shutdown_signal', self.shutdown_callback, 10)
         self.carpub = self.create_publisher(CarState, 'car_state',10)
-        self.throttle = self.create_timer(0.08, self.car_state_callback)
+        self.throttle = self.create_timer(0.001, self.car_state_callback)
         self.q1 = [0.6530918478965759, -0.015541106462478638, -0.020415853708982468, 0.7568438649177551]
         self.q2 = [0, 0, 0, 0]
         self.origin_my_world = [0.30958878993988037, 0.7059913873672485]
@@ -33,6 +35,11 @@ class Car_state_publisher(Node):
         self.q_y = msgRigidBodyPose.pose.orientation.y
         self.q_z = msgRigidBodyPose.pose.orientation.z
         self.q_w = msgRigidBodyPose.pose.orientation.w
+
+    def shutdown_callback(self, msg):
+        self.get_logger().info('Received shutdown signal. Shutting down Car State Publisher.')
+        self.destroy_node()
+        rclpy.shutdown()
 
     def quaternion_to_euler(self, q):
         w, x, y, z = q
@@ -99,7 +106,7 @@ class Car_state_publisher(Node):
 
         car_msg.angle = angle_z
         car_msg.x = car_x
-        car_msg.y = car_y
+        car_msg.y = car_y - 5
 
         self.get_logger().info(f'car state x:{car_x:.2f} y:{car_y:.2f} angle:{angle_z:.2f}')
 

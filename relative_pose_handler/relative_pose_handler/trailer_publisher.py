@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from custom_msg.msg import CarState
 from custom_msg.msg import TruckTrailerState
+from custom_msg.msg import Shutdown
 from crs_msgs.msg import CarSteerState
 from matplotlib.patches import Rectangle, Circle
 from matplotlib.transforms import Affine2D
@@ -131,13 +132,14 @@ class EKFTrailerPublisher(Node):
         # Subscriptions
         self.sub = self.create_subscription(CarState, '/car_state', self.truck_state_callback, 10)
         self.sub1 = self.create_subscription(CarSteerState, '/car_steer_state', self.steer_callback, 10)
+        self.shutdown_subscriber = self.create_subscription(Shutdown, '/shutdown_signal', self.shutdown_callback, 10)
 
         # Publisher
         self.pub = self.create_publisher(TruckTrailerState, '/truck_trailer_pose', 10)
 
         # Constants
         self.L1 = 9.0
-        self.L2 = 10.0
+        self.L2 = 7.0
         self.hitch_offset = 0.0
 
         # Control inputs
@@ -146,7 +148,7 @@ class EKFTrailerPublisher(Node):
 
         # EKF Initialization
         # dt is initialized to a small number; it will be updated dynamically.
-        self.ekf = RobotEKF(dt=0.01, L1=self.L1, L2=self.L2, hitch_offset=self.hitch_offset)
+        self.ekf = RobotEKF(dt=0.001, L1=self.L1, L2=self.L2, hitch_offset=self.hitch_offset)
 
         # State tracking
         self.initialized = False
@@ -183,7 +185,7 @@ class EKFTrailerPublisher(Node):
             if dt > 1e-4:  # Ensure a meaningful time step
                 # Estimate velocity
                 distance = np.sqrt((truck_x - self.last_truck_x) ** 2 + (truck_y - self.last_truck_y) ** 2)
-                self.v1x = distance / dt
+                self.v1x = -(distance / dt)
 
                 # Update EKF's internal timestep
                 self.ekf.dt = dt
@@ -207,6 +209,11 @@ class EKFTrailerPublisher(Node):
 
     def steer_callback(self, msg):
         self.steering_angle = msg.steer_angle - np.deg2rad(2)
+
+    def shutdown_callback(self, msg):
+        self.get_logger().info('Received shutdown signal. Shutting down EKF Trailer Publisher.')
+        self.destroy_node()
+        rclpy.shutdown()
 
     def publish_trailer_state(self):
         if not self.initialized:

@@ -26,6 +26,7 @@ setup(
             'car_pose = relative_pose_handler.pub_car_world_2_my_world:main',
             'pose = relative_pose_handler.car_publisher:main',
             'sys = relative_pose_handler.trailer_publisher:main',
+            'render = relative_pose_handler.truck_trailer_publisher:main',
         ],
     },
 )

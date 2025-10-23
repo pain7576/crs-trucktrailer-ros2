@@ -389,7 +389,7 @@ class Controller_simulator(Node):
         if self.goal_reached:
             return
         msg4 = CarInput()
-        msg4.torque = -0.07 #  0.25 m/s
+        msg4.torque = -0.085#  0.25 m/s
         msg4.velocity = math.nan
         msg4.steer =  self.steering # offfset due to physical constrain
         msg4.steer_override = False
@@ -399,7 +399,7 @@ class Controller_simulator(Node):
 
     def controller_callback(self, msg):
 
-        if not self.goal_reached and msg.y2 < self.goaly :
+        if not self.goal_reached and msg.y2 < self.goaly  :
             self.get_logger().info(f'Goal reached: trailer y ({msg.y2}) < goal y ({self.goaly}). Stopping publishing.')
             self.goal_reached = True
             shutdown_msg = Shutdown()

@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from custom_msg.msg import CarState
+from custom_msg.msg import CarState, TrailerState
 from custom_msg.msg import Shutdown
 from geometry_msgs.msg import PoseStamped
 import matplotlib.pyplot as plt
@@ -12,11 +12,15 @@ class Car_state_publisher(Node):
     def __init__(self):
         super().__init__('car_state_publisher')
         self.carmocap = self.create_subscription(PoseStamped, 'BEN_CAR_WIFI/pose', self.latest_value_callback, 10)
+        self.trailermocap = self.create_subscription(PoseStamped, '/trailer1/pose',self.laetest_trailer_callback,10)
         self.shutdown_subscriber = self.create_subscription(Shutdown, '/shutdown_signal', self.shutdown_callback, 10)
         self.carpub = self.create_publisher(CarState, 'car_state',10)
+        self.trailerpub = self.create_publisher(TrailerState, 'trailer_state',10 )
         self.throttle = self.create_timer(0.001, self.car_state_callback)
         self.q1 = [0.6530918478965759, -0.015541106462478638, -0.020415853708982468, 0.7568438649177551]
+        self.q4 =  [-0.880913257598877, -0.003670475911349058, -0.004181669559329748, -0.47324517369270325]
         self.q2 = [0, 0, 0, 0]
+        self.q3 = [0, 0, 0, 0]
         self.origin_my_world = [0.30958878993988037, 0.7059913873672485]
         self.latest_x = 0
         self.latest_y = 0
@@ -24,6 +28,12 @@ class Car_state_publisher(Node):
         self.q_y = 0
         self.q_z = 0
         self.q_w = 0
+        self.latest_x1 = 0
+        self.latest_y1 = 0
+        self.q_x1 = 0
+        self.q_y1 = 0
+        self.q_z1 = 0
+        self.q_w1 = 0
 
 
 
@@ -35,6 +45,14 @@ class Car_state_publisher(Node):
         self.q_y = msgRigidBodyPose.pose.orientation.y
         self.q_z = msgRigidBodyPose.pose.orientation.z
         self.q_w = msgRigidBodyPose.pose.orientation.w
+
+    def laetest_trailer_callback(self, msgRigidBodyPose):
+        self.latest_x1 = (msgRigidBodyPose.pose.position.x)
+        self.latest_y1 = (msgRigidBodyPose.pose.position.y)
+        self.q_x1 = msgRigidBodyPose.pose.orientation.x
+        self.q_y1 = msgRigidBodyPose.pose.orientation.y
+        self.q_z1 = msgRigidBodyPose.pose.orientation.z
+        self.q_w1 = msgRigidBodyPose.pose.orientation.w
 
     def shutdown_callback(self, msg):
         self.get_logger().info('Received shutdown signal. Shutting down Car State Publisher.')
@@ -88,9 +106,15 @@ class Car_state_publisher(Node):
         self.q2[2] = self.q_y
         self.q2[3] = self.q_z
 
-        diffx, diffy, diffz = self.angle_finder(self.q1,self.q2)
+        self.q3[0] = self.q_w1
+        self.q3[1] = self.q_x1
+        self.q3[2] = self.q_y1
+        self.q3[3] = self.q_z1
 
-        return diffx, diffy, diffz
+        diffx, diffy, diffz = self.angle_finder(self.q1,self.q2)
+        diffx1, diffy1, diffz1 = self.angle_finder(self.q4,self.q3)
+
+        return diffx, diffy, diffz, diffx1, diffy1, diffz1
 
     def car_pos_world_2_my_world(self, x, y):
         car_state_x = (x - self.origin_my_world[0])*100
@@ -101,16 +125,23 @@ class Car_state_publisher(Node):
     def car_state_callback(self):
 
         car_msg = CarState()
-        angle_x, angle_y, angle_z = self.quaternion2angles()
+        trailer_msg = TrailerState()
+        angle_x, angle_y, angle_z, angle_x1, angle_y1, angle_z1= self.quaternion2angles()
         car_x, car_y = self.car_pos_world_2_my_world(self.latest_x , self.latest_y)
+        trailerx, trailery = self.car_pos_world_2_my_world(self.latest_x1 , self.latest_y1)
 
         car_msg.angle = angle_z
-        car_msg.x = car_x
+        car_msg.x = car_x + 2.18
         car_msg.y = car_y - 5
 
-        self.get_logger().info(f'car state x:{car_x:.2f} y:{car_y:.2f} angle:{angle_z:.2f}')
+        trailer_msg.angle = angle_z1 + 3
+        trailer_msg.x = trailerx  + 2 - 0.87
+        trailer_msg.y = trailery - 1.63 - 2.56
+
+        self.get_logger().info(f'car state x:{car_x:.2f} y:{car_y:.2f} angle:{angle_z:.2f} trailer state x:{trailerx:.2f} y:{trailery:.2f} angle:{angle_z1:.2f}')
 
         self.carpub.publish(car_msg)
+        self.trailerpub.publish(trailer_msg)
 
 def main():
     rclpy.init()

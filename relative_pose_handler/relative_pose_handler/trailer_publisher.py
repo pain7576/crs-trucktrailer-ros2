@@ -3,6 +3,7 @@ from rclpy.node import Node
 from custom_msg.msg import CarState
 from custom_msg.msg import TruckTrailerState
 from custom_msg.msg import Shutdown
+from custom_msg.msg import TrailerState
 from crs_msgs.msg import CarSteerState
 from matplotlib.patches import Rectangle, Circle
 from matplotlib.transforms import Affine2D
@@ -139,8 +140,8 @@ class EKFTrailerPublisher(Node):
 
         # Constants
         self.L1 = 9.0
-        self.L2 = 7.0
-        self.hitch_offset = 0.0
+        self.L2 = 7
+        self.hitch_offset = 2.5
 
         # Control inputs
         self.v1x = 0.0
@@ -315,7 +316,7 @@ class EKFTrailerPublisher(Node):
         L1, W1 = self.L1, 2.0
         L2, W2 = self.L2, 2.0
         delta = self.steering_angle  # Use actual steering angle
-        hitch_offset = 0.0
+        hitch_offset = 2.5
 
         # Draw vehicles
         self.plot_vehicle(self.ax, x1, y1, psi1, L1, W1, label='Truck', color='blue', show_wheels=True,

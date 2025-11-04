@@ -4,6 +4,8 @@
 
 This is a ROS 2 system for autonomous truck-trailer maneuvering using Deep Deterministic Policy Gradient (DDPG) reinforcement learning. The system integrates motion capture data, Extended Kalman Filter (EKF) state estimation, and neural network-based control.
 
+![Replay 1](assets\video.gif)
+
 ## System Architecture
 
 The project consists of three main ROS 2 packages:
